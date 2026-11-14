@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#f4f2ee" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Suminagashi" />
+    <meta name="description" content="Suminagashi: float ink on water, comb it, blow on it, then lay paper on it to take a print." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://suminagashi.gnass.buzz/" />
+    <meta property="og:title" content="Suminagashi" />
+    <meta property="og:description" content="Float ink on water, comb it, blow on it, then lay paper on it to take a print." />
+    <meta property="og:image" content="https://suminagashi.gnass.buzz/screenshots/og.jpg" />
+    <meta property="og:image:width" content="2400" />
+    <meta property="og:image:height" content="1260" />
+    <meta property="og:image:alt" content="Suminagashi: rings and swirls of magenta and indigo ink with the word Suminagashi" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/pwa-192x192.png" sizes="192x192" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />
+    <title>Suminagashi</title>
+  </head>
+  <body>
+    <canvas id="gl"></canvas>
+    <svg id="aim" class="aim" hidden><line /><circle r="5" /></svg>
+    <div id="cursor" class="cursor" hidden></div>
+
+    <div id="hud">
+      <header class="top">
+        <button id="menuBtn" class="round" aria-label="Menu">
+          <span class="icon" data-icon="menu"></span>
+        </button>
+        <p id="hint" class="hint" aria-live="polite"></p>
+        <button id="printBtn" class="round" aria-label="Print: lay paper on the water">
+          <span class="icon" data-icon="layers"></span>
+        </button>
+      </header>
+
+      <footer class="dock">
+        <div class="paints">
+          <button id="paletteBtn" class="swatch palette-btn" aria-label="Palette">
+            <span class="icon" data-icon="palette"></span>
+          </button>
+          <div id="paints" role="radiogroup" aria-label="Ink"></div>
+        </div>
+        <div class="seg" id="tools" role="radiogroup" aria-label="Tool">
+          <button data-tool="drop" role="radio">
+            <span class="icon" data-icon="colorize" data-fill></span>
+            <span>Drop</span>
+          </button>
+          <button data-tool="needle" role="radio">
+            <span class="icon" data-icon="keep" data-fill></span>
+            <span>Needle</span>
+          </button>
+          <button data-tool="whisker" role="radio">
+            <span class="icon" data-icon="line_curve"></span>
+            <span>Whisker</span>
+          </button>
+          <button data-tool="breath" role="radio">
+            <span class="icon" data-icon="air" data-fill></span>
+            <span>Breath</span>
+          </button>
+          <button data-tool="straw" role="radio">
+            <span class="icon" data-icon="airwave"></span>
+            <span>Straw</span>
+          </button>
+          <button data-tool="spray" role="radio">
+            <span class="icon" data-icon="grain" data-fill></span>
+            <span>Spray</span>
+          </button>
+          <button data-tool="alcohol" role="radio">
+            <span class="icon" data-icon="science" data-fill></span>
+            <span>Alcohol</span>
+          </button>
+        </div>
+      </footer>
+    </div>
+
+    <div id="sheet" class="sheet" hidden>
+      <div class="sheet-panel" role="dialog" aria-label="Menu">
+        <div class="tiles">
+          <button data-act="new" class="tile fresh">
+            <span class="icon" data-icon="water"></span>
+            <span>New bath</span>
+          </button>
+          <button data-act="demo" class="tile demo">
+            <span class="icon" data-icon="play_circle"></span>
+            <span>Watch demo</span>
+          </button>
+        </div>
+        <button data-act="drift" class="row" role="switch" aria-checked="true">
+          <span class="icon" data-icon="cyclone"></span>
+          <span>Drift</span>
+          <span class="switch" aria-hidden="true"></span>
+        </button>
+        <button data-act="help" class="row">
+          <span class="icon" data-icon="info"></span>
+          <span>About</span>
+        </button>
+        <button data-act="install" class="row" hidden>
+          <span class="icon" data-icon="download"></span>
+          <span>Install app</span>
+        </button>
+        <div class="sheet-sep"></div>
+        <a class="row app" href="https://pour.gnass.buzz" target="_blank" rel="noopener">
+          <img src="/pour.png" alt="" width="28" height="28" />
+          <span class="two">
+            <span>Pour</span>
+            <small>Acrylic pouring on your phone</small>
+          </span>
+        </a>
+        <a class="row" href="https://gnass.buzz/projects/" target="_blank" rel="noopener">
+          <span class="icon" data-icon="apps"></span>
+          <span>More apps</span>
+        </a>
+        <div class="sheet-sep"></div>
+        <a class="row" href="https://github.com/fgnass/suminagashi" target="_blank" rel="noopener">
+          <span class="icon" data-icon="code"></span>
+          <span>Source on GitHub</span>
+        </a>
+        <a class="row" href="https://gnass.buzz/privacy" target="_blank" rel="noopener">
+          <span class="icon" data-icon="shield_person"></span>
+          <span>Privacy</span>
+        </a>
+      </div>
+    </div>
+
+    <div id="palettes" class="sheet sheet-bottom" hidden>
+      <div class="sheet-panel" role="dialog" aria-label="Palettes"></div>
+    </div>
+
+    <div id="printView" class="print" hidden>
+      <canvas id="printCanvas" aria-label="The print"></canvas>
+      <div class="print-actions">
+        <button id="printBack">Back to the bath</button>
+        <button id="printSave" class="primary">
+          <span class="icon" data-icon="ios_share"></span>
+          <span>Save</span>
+        </button>
+      </div>
+    </div>
+
+    <div id="start" class="start">
+      <div class="start-panel">
+        <h1>Suminagashi</h1>
+        <p class="lead">
+          Suminagashi, “floating ink”, is the oldest way of marbling paper. Drops of ink and of soapy water spread on water in
+          rings. A breath or a needle moves them into lines. A sheet of paper laid on the water takes up the picture.
+        </p>
+        <div class="start-actions">
+          <button id="startBtn" class="primary">Start</button>
+          <button id="demoBtn">Watch demo</button>
+        </div>
+        <button id="installBtn" class="install" hidden>Install app</button>
+        <p id="installHelp" class="note" hidden></p>
+        <p class="start-links">
+          <a href="https://gnass.buzz/projects/" target="_blank" rel="noopener">More apps</a>
+          <span aria-hidden="true">·</span>
+          <a href="https://github.com/fgnass/suminagashi" target="_blank" rel="noopener">GitHub</a>
+          <span aria-hidden="true">·</span>
+          <a href="https://gnass.buzz/privacy" target="_blank" rel="noopener">Privacy</a>
+        </p>
+      </div>
+    </div>
+
+    <div id="error" class="start" hidden><div class="start-panel"><h1>Sorry</h1><p id="errorMsg"></p></div></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

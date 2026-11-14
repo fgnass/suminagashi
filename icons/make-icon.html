@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8" />
+<!--
+  The app icon: an S in Rubik Moonrocks, in white, over a marbling made with
+  the app's demo (background.png, palette Magenta & indigo, 1200 × 1200).
+  Open it from the dev server (/icons/make-icon.html): it shows the most
+  colourful parts of the background as candidates. In the console:
+    await save(1, CROP)    // icon.png: full bleed
+    await save(0.78, CROP) // maskable.png: the S inside the 80 % safe circle
+  CROP is { x, y, size } in background pixels. Each call returns a PNG data
+  URL of 1024 × 1024: write it to icons/, then `npm run icons`.
+-->
+<style>
+  @font-face { font-family: Moonrocks; src: url(rubik-moonrocks.ttf); }
+  body { margin: 0; padding: 20px; background: #e9e6e0; font: 13px system-ui; color: #7d766d; display: flex; flex-wrap: wrap; gap: 20px; }
+  figure { margin: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+  canvas { width: 200px; height: 200px; border-radius: 44px; }
+</style>
+<script>
+  const N = 1024;
+  /** The crop in use. */
+  const CROP = { x: 500, y: 550, size: 450, ...JSON.parse(new URLSearchParams(location.search).get('crop') ?? '{}') };
+  const bg = new Image();
+  bg.src = 'background.png';
+  async function draw(canvas, scale, crop = CROP) {
+    await bg.decode();
+    await document.fonts.load('100px Moonrocks');
+    canvas.width = canvas.height = N;
+    const g = canvas.getContext('2d');
+    g.drawImage(bg, crop.x, crop.y, crop.size, crop.size, 0, 0, N, N);
+    g.font = `${Math.round(N * 0.82 * scale)}px Moonrocks`;
+    // centred on the glyph's own box, not on the font's line
+    const m = g.measureText('S');
+    const x = N / 2 - (m.actualBoundingBoxRight - m.actualBoundingBoxLeft) / 2;
+    const y = N / 2 + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
+    g.fillStyle = '#fbfaf7';
+    g.fillText('S', x, y);
+    return canvas.toDataURL('image/png');
+  }
+  window.save = (scale, crop) => draw(document.createElement('canvas'), scale, crop);
+
+  /** How colourful a part of the background is: its mean chroma, with the
+   *  light parts counted less (the white S needs colour behind it). */
+  function colourfulness(px, w, { x, y, size }) {
+    let sum = 0, n = 0;
+    for (let j = y; j < y + size; j += 6)
+      for (let i = x; i < x + size; i += 6) {
+        const k = (j * w + i) * 4, r = px[k], g = px[k + 1], b = px[k + 2];
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        sum += (max - min) / 255 * (1.2 - max / 255);
+        n++;
+      }
+    return sum / n;
+  }
+  (async () => {
+    await bg.decode();
+    const c = document.createElement('canvas');
+    c.width = bg.width; c.height = bg.height;
+    const g = c.getContext('2d');
+    g.drawImage(bg, 0, 0);
+    const px = g.getImageData(0, 0, c.width, c.height).data;
+    const crops = [];
+    for (const size of [450, 600, 800])
+      for (let y = 0; y + size <= bg.height; y += 50)
+        for (let x = 0; x + size <= bg.width; x += 50) crops.push({ x, y, size, score: colourfulness(px, bg.width, { x, y, size }) });
+    crops.sort((a, b) => b.score - a.score);
+    // the best ones, not too close to each other
+    const picked = [];
+    for (const k of crops) {
+      if (picked.some(p => Math.abs(p.x - k.x) < 150 && Math.abs(p.y - k.y) < 150 && p.size === k.size)) continue;
+      picked.push(k);
+      if (picked.length === 8) break;
+    }
+    picked.forEach((crop, i) => {
+      const f = document.createElement('figure');
+      const cv = document.createElement('canvas');
+      const cap = document.createElement('figcaption');
+      cap.textContent = `${i + 1}: x ${crop.x}, y ${crop.y}, size ${crop.size}`;
+      f.append(cv, cap);
+      document.body.append(f);
+      draw(cv, 1, crop);
+    });
+    window.crops = picked;
+  })();
+</script>
