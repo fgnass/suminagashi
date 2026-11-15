@@ -56,8 +56,10 @@ vec4 sampleCR(sampler2D t, vec2 uv, vec2 size){
   vec2 w1 = 1.0 + f*f*(-2.5 + 1.5*f);
   vec2 w2 = f*(0.5 + f*(2.0 - 1.5*f));
   vec2 w3 = f*f*(-0.5 + 0.5*f);
-  float wx[4] = float[4](w0.x,w1.x,w2.x,w3.x);
-  float wy[4] = float[4](w0.y,w1.y,w2.y,w3.y);
+  // vec4, not float[4]: some Android drivers give an array constructor no
+  // precision and refuse the shader
+  vec4 wx = vec4(w0.x,w1.x,w2.x,w3.x);
+  vec4 wy = vec4(w0.y,w1.y,w2.y,w3.y);
   ivec2 m = ivec2(size)-1;
   vec4 r = vec4(0), mn = vec4(1e9), mx = vec4(-1e9);
   for(int y=0;y<4;y++) for(int x=0;x<4;x++){
