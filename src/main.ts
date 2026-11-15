@@ -4,6 +4,7 @@ import { Bath, type Drop } from './bath';
 import { mountIcons } from './icons';
 import { initInstall } from './install';
 import { CLEAR, ink, PALETTES, rgb } from './palettes';
+import { Tour } from './tour';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const store = {
@@ -35,6 +36,7 @@ const printView = $('#printView');
 const printCanvas = $<HTMLCanvasElement>('#printCanvas');
 const aimEl = document.querySelector<SVGSVGElement>('#aim')!;
 const cursorEl = $('#cursor');
+const fingerEl = $('#finger');
 const coarse = matchMedia('(pointer: coarse)').matches;
 
 function showError(msg: string) {
@@ -68,7 +70,7 @@ function hideHint() {
 }
 
 // ---------------------------------------------------------------- tools
-type ToolId = 'drop' | 'needle' | 'whisker' | 'breath' | 'straw' | 'spray' | 'alcohol';
+export type ToolId = 'drop' | 'needle' | 'whisker' | 'breath' | 'straw' | 'spray' | 'alcohol';
 /** Each tool: what it does (the hint) and how big it is on the water, in
  *  heights of a landscape bath (for the cursor). */
 const TOOLS: Record<ToolId, { hint: string; r: number; paint?: boolean }> = {
@@ -130,22 +132,28 @@ function markPaint() {
   soap?.classList.toggle('alt', alternate);
   soap?.setAttribute('aria-label', alternate ? 'Soap, in turn with the ink: tap to stop' : 'Soap');
 }
-function selectPaint(i: number) {
+function selectPaint(i: number, quiet = false) {
   if (!TOOLS[tool].paint) setTool('drop', false);
   nextSoap = false;
+  const say = quiet ? () => {} : hint;
   if (i === SOAP) {
     if (alternate) {
       alternate = false;
-      hint('Ink only', 1500);
+      say('Ink only', 1500);
     } else {
       paint = SOAP;
-      hint('Soap. Tap an ink for both in turn.', 3500);
+      say('Soap. Tap an ink for both in turn.', 3500);
     }
   } else {
     if (paint === SOAP) alternate = true;
     paint = i;
-    hint(alternate ? 'Ink and soap in turn. Tap soap to stop.' : 'Ink', alternate ? 3500 : 1500);
+    say(alternate ? 'Ink and soap in turn. Tap soap to stop.' : 'Ink', alternate ? 3500 : 1500);
   }
+  markPaint();
+}
+function resetPaint() {
+  alternate = nextSoap = false;
+  if (paint === SOAP) paint = 0;
   markPaint();
 }
 paintsEl.addEventListener('click', e => {
@@ -212,9 +220,14 @@ function handsOn() {
 }
 
 // ---------------------------------------------------------------- the demo
+// Behind the start dialog an artist works at the bath, the tool bar hidden
+// (`demo`). "Watch demo" is the guided tour instead: it uses the tool bar
+// and says what it does (`tour`).
 let artist: Artist | null = null;
 let demo = false;
+let tour: Tour | null = null;
 function startDemo(fresh: boolean) {
+  stopTour();
   if (fresh) bath.clear();
   artist = new Artist(bath, PALETTES[palette]);
   demo = true;
@@ -226,11 +239,42 @@ function startDemo(fresh: boolean) {
   bath.drift = 0;
 }
 function stopDemo() {
+  stopTour();
   if (!demo) return;
   demo = false;
   artist = null;
   document.body.classList.remove('demo');
   handsOn();
+}
+function startTour() {
+  stopDemo();
+  for (const id of touches.keys()) lift(id);
+  bath.clear();
+  tour = new Tour({
+    tool: t => setTool(t, false),
+    paint: i => selectPaint(i, true),
+    resetPaint,
+    inks: () => PALETTES[palette].paints.length,
+    press,
+    drag,
+    lift,
+    hint: text => hint(text, 0),
+    showPrint: on => $('#printBtn').classList.toggle('pulse', on),
+    skim: () => bath.skim(),
+  });
+}
+function stopTour() {
+  if (!tour) return;
+  tour.stop();
+  tour = null;
+  hideHint();
+}
+/** A touch of the user's while a demo runs: the demo ends. */
+function takeOver() {
+  if (!demo && !tour) return false;
+  stopDemo();
+  hint('Your turn', 1500);
+  return true;
 }
 
 // ---------------------------------------------------------------- touches
@@ -253,45 +297,33 @@ let clock = 0;
 const toBath = (e: PointerEvent): [number, number] => [e.clientX / innerWidth, 1 - e.clientY / innerHeight];
 
 canvas.addEventListener('contextmenu', e => e.preventDefault());
-canvas.addEventListener('pointerdown', e => {
-  if (demo) {
-    // touching the water takes over from the artist
-    stopDemo();
-    hint('Your turn', 1500);
-    return;
-  }
-  try {
-    canvas.setPointerCapture(e.pointerId);
-  } catch {
-    /* (a pointer the browser does not know, as in a scripted test) */
-  }
-  const [x, y] = toBath(e);
-  // with the mouse, the right button touches with soap
-  let ink = e.button === 2 ? CLEAR : inkNow();
-  if (tool === 'drop' && alternate && e.button !== 2) {
+/** A touch begins at (x, y) in the bath's uv: the user's, or the tour's
+ *  (ids below zero, shown by a dot). With `soap`, it drops clear water. */
+function press(id: number, x: number, y: number, soap = false) {
+  let ink = soap ? CLEAR : inkNow();
+  if (tool === 'drop' && alternate && !soap) {
     if (nextSoap) ink = CLEAR;
     nextSoap = !nextSoap;
   }
   const t: Touch = { x, y, px: x, py: y, ox: x, oy: y, t0: clock, tool, ink, lastSpray: clock };
-  touches.set(e.pointerId, t);
+  touches.set(id, t);
   if (tool === 'drop') t.drop = bath.drop(x, y, 0.007, ink, { held: true, tau: 0.3, jag: 0.12 });
   else if (tool === 'spray') spray(t);
-  hideHint();
-});
-canvas.addEventListener('pointermove', e => {
-  const [x, y] = toBath(e);
-  const t = touches.get(e.pointerId);
-  if (t) {
-    t.x = x;
-    t.y = y;
-  }
-  if (e.pointerType === 'mouse') showCursor(e.clientX, e.clientY);
-});
-canvas.addEventListener('pointerleave', () => (cursorEl.hidden = true));
-function release(e: PointerEvent) {
-  const t = touches.get(e.pointerId);
+  if (id < 0) showFinger(x, y);
+  else hideHint();
+}
+function drag(id: number, x: number, y: number) {
+  const t = touches.get(id);
   if (!t) return;
-  touches.delete(e.pointerId);
+  t.x = x;
+  t.y = y;
+  if (id < 0) showFinger(x, y);
+}
+function lift(id: number) {
+  const t = touches.get(id);
+  if (id < 0) fingerEl.hidden = true;
+  if (!t) return;
+  touches.delete(id);
   lastTouch = clock;
   if (t.tool === 'alcohol') {
     // a tap: isopropyl, a patch torn open at once
@@ -299,8 +331,31 @@ function release(e: PointerEvent) {
     else bath.let(t.drop);
   } else if (t.drop) bath.let(t.drop);
 }
-canvas.addEventListener('pointerup', release);
-canvas.addEventListener('pointercancel', release);
+function showFinger(x: number, y: number) {
+  fingerEl.hidden = false;
+  fingerEl.style.transform = `translate(${x * innerWidth}px, ${(1 - y) * innerHeight}px)`;
+}
+
+canvas.addEventListener('pointerdown', e => {
+  // touching the water takes over from a demo
+  if (takeOver()) return;
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {
+    /* (a pointer the browser does not know, as in a scripted test) */
+  }
+  // with the mouse, the right button touches with soap
+  press(e.pointerId, ...toBath(e), e.button === 2);
+});
+canvas.addEventListener('pointermove', e => {
+  drag(e.pointerId, ...toBath(e));
+  if (e.pointerType === 'mouse') showCursor(e.clientX, e.clientY);
+});
+canvas.addEventListener('pointerleave', () => (cursorEl.hidden = true));
+canvas.addEventListener('pointerup', e => lift(e.pointerId));
+canvas.addEventListener('pointercancel', e => lift(e.pointerId));
+// a tap on the bar or the buttons ends the tour too, and does what it does
+$('#hud').addEventListener('pointerdown', () => tour && takeOver(), true);
 
 function spray(t: Touch) {
   bath.spray(t.x, t.y, t.ink, 30 + Math.floor(Math.random() * 25), 1, Math.random() * Math.PI);
@@ -419,10 +474,7 @@ sheet.addEventListener('click', e => {
   // the switch stays in view to show its new state
   if (act !== 'drift') sheet.hidden = true;
   if (act === 'new') newBath();
-  else if (act === 'demo') {
-    startDemo(true);
-    hint('Demo: touch the water to take over');
-  } else if (act === 'drift') {
+  else if (act === 'demo') startTour(); else if (act === 'drift') {
     drift = !drift;
     store.set('drift', drift ? 'on' : 'off');
     syncDrift();
@@ -451,6 +503,7 @@ addEventListener('keydown', e => {
     return;
   }
   if (!startEl.hidden || !printView.hidden) return;
+  if (tour) takeOver();
   const n = +e.key;
   const ids = Object.keys(TOOLS) as ToolId[];
   if (n >= 1 && n <= ids.length) setTool(ids[n - 1]);
@@ -474,6 +527,8 @@ document.addEventListener('visibilitychange', () => {
 });
 
 function showStart() {
+  // (the tour's hints would talk over the dialog)
+  stopTour();
   startEl.hidden = false;
   startEl.classList.remove('gone');
 }
@@ -481,10 +536,8 @@ function begin(withDemo: boolean) {
   startEl.classList.add('gone');
   setTimeout(() => (startEl.hidden = true), 400);
   keepAwake();
-  if (withDemo) {
-    if (!demo) startDemo(true);
-    hint('Demo: touch the water to take over');
-  } else {
+  if (withDemo) startTour();
+  else {
     if (demo) {
       stopDemo();
       bath.skim();
@@ -521,6 +574,7 @@ function frame(now: number) {
     // the artist's water runs a little slower: a calm tempo
     bath.step(dt * 0.75);
   } else {
+    tour?.frame(dt);
     work(dt);
     bath.step(dt);
   }
@@ -534,4 +588,4 @@ handsOn();
 startDemo(true);
 requestAnimationFrame(frame);
 
-if (import.meta.env.DEV) Object.assign(window, { dev: { bath, artist: () => artist, palettes: PALETTES, palette: applyPalette, startDemo, stopDemo } });
+if (import.meta.env.DEV) Object.assign(window, { dev: { bath, artist: () => artist, palettes: PALETTES, palette: applyPalette, startDemo, stopDemo, startTour, tour: () => tour } });

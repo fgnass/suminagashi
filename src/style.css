@@ -129,6 +129,33 @@ svg {
 .cursor[hidden] {
   display: none;
 }
+/* the guided demo's finger */
+.finger {
+  position: fixed;
+  left: -14px;
+  top: -14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.45);
+  border: 1.5px solid rgba(43, 39, 35, 0.45);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+  z-index: 1;
+}
+.finger[hidden] {
+  display: none;
+}
+/* the tour points at the print button */
+#printBtn.pulse {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 8px rgba(43, 39, 35, 0.15);
+    transform: scale(1.08);
+  }
+}
 
 /* ------------------------------------------------------------------ HUD */
 #hud {

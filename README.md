@@ -32,7 +32,9 @@ you can install it as an app (PWA).
 - **Print**: lays paper on the water. You get the picture as the paper takes it up
   (mirrored), to save or share. A faint ghost stays on the water.
 - **Palettes**: a set of ink palettes, each with a matching paper colour.
-- **Demo**: an artist works at the bath on her own. Touch the water to take over.
+- **Demo**: the app shows how it is used. It selects the tools and inks in the tool bar,
+  says in a hint what it does, and works the water with a visible finger. Touch the water
+  or the tool bar to take over. Behind the start panel, an artist works at the bath on her own.
 
 ### Keyboard shortcuts
 
