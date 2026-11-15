@@ -1,5 +1,5 @@
 import { Bath, type Drop } from './bath';
-import { CLEAR, ink, type Palette } from './palettes';
+import { CLEAR, paint, type Palette } from './palettes';
 
 // THE DEMO: AN ARTIST AT THE BATH.
 //
@@ -64,7 +64,7 @@ export class Artist {
   /** The paints she uses, in the order she uses them: the kick's, the
    *  snare's, the chords', the tune's, the bass's. */
   setPalette(p: Palette) {
-    this.brushes = p.paints.map(h => ink(h));
+    this.brushes = p.paints.map((_, i) => paint(i));
   }
   private brush(i: number) {
     return this.brushes[i % this.brushes.length];

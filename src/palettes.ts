@@ -1,25 +1,41 @@
+import { ROLES } from './bath.ts';
 import { sampleCanvases } from './vendor/colors/canvas.ts';
 import { fromHex, maxChroma, toGamut, toHex, type Lch } from './vendor/colors/color.ts';
 import { createRng } from './vendor/colors/random.ts';
 
-/** A palette: the tray under the water and the paints, display colours. */
+/** A palette: the tray under the water and the paints, display colours.
+ *  The paints fill fixed colour roles, in this order: the loud main colour,
+ *  a dark one, a companion, a light one, and two more. Ink on the water
+ *  keeps its role, so a new palette recolours what is already there. */
 export type Palette = { name: string; ground: string; paints: string[] };
 
 const parse = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
 /** A colour as an ink: what it takes out of the light (Beer–Lambert), so a
  *  film of it on the tray shows that colour, and films over each other
  *  darken. The darkest colours are capped, or they print black. */
-export const ink = (hex: string, strength = 1) => parse(hex).map(v => -Math.log(Math.max(0.07, v)) * strength);
+export const absorb = (hex: string, strength = 1) => parse(hex).map(v => -Math.log(Math.max(0.07, v)) * strength);
 export const rgb = (hex: string) => parse(hex) as [number, number, number];
 /** Clear water with a drop of soap: it pushes the ink aside and adds none. */
-export const CLEAR = [0, 0, 0];
+export const CLEAR: number[] = Array(ROLES).fill(0);
+/** The paint in role `i`, as the bath takes it: a weight per role. */
+export const paint = (i: number, strength = 1) => CLEAR.map((_, r) => (r === i ? strength : 0));
+
+/** Which paint stands in for a role a palette has no paint for: the fifth
+ *  (a second light one) takes the light one, the sixth the main one. */
+const STAND_IN = [0, 1, 2, 3, 3, 0, 2, 1];
+/** Each role's ink in palette `p`: what the film's roles look like. */
+export function inks(p: Palette) {
+  const n = p.paints.length;
+  return CLEAR.map((_, r) => absorb(p.paints[r < n ? r : STAND_IN[r] < n ? STAND_IN[r] : r % n]));
+}
 
 /** The traditional inks: sumi, diluted and strong, and a few
- *  colours, on a pale tray. */
+ *  colours, on a pale tray. In the order of the roles: yellow, sumi,
+ *  blue, pale blue, diluted sumi, red. */
 const SUMI: Palette = {
   name: 'Sumi',
   ground: '#f7f5f3',
-  paints: ['#33302e', '#80756b', '#5c73c2', '#94cfdb', '#e66661', '#fae073'],
+  paints: ['#fae073', '#33302e', '#5c73c2', '#94cfdb', '#80756b', '#e66661'],
 };
 
 /** The palette of a favourite marbling: high contrast,
@@ -81,7 +97,8 @@ function card(name: string, [loud, accent, deep, light]: string[]): Palette {
   // a near-white paper with a faint tint of the light paint, never cream
   const tint = fromHex(light);
   const paper = toGamut({ l: 0.975, c: Math.min(tint.c, 0.012), h: tint.h });
-  return { name, ground: toHex(paper), paints: [loud, accent, deep, light] };
+  // in the order of the roles: main, dark, companion, light
+  return { name, ground: toHex(paper), paints: [loud, deep, accent, light] };
 }
 
 export const PALETTES: Palette[] = [

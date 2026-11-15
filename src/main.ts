@@ -3,7 +3,7 @@ import { Artist } from './artist';
 import { Bath, type Drop } from './bath';
 import { mountIcons } from './icons';
 import { initInstall } from './install';
-import { CLEAR, ink, PALETTES, rgb } from './palettes';
+import { CLEAR, inks, paint as role, PALETTES, rgb } from './palettes';
 import { Tour } from './tour';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -104,7 +104,7 @@ const SOAP = -1;
  *  when an ink is picked while soap is selected; a tap on soap ends it. */
 let alternate = false;
 let nextSoap = false;
-const inkNow = () => (paint === SOAP ? CLEAR : ink(PALETTES[palette].paints[paint]));
+const inkNow = () => (paint === SOAP ? CLEAR : role(paint));
 
 function swatch(color: string | null, i: number) {
   const b = document.createElement('button');
@@ -166,6 +166,8 @@ function applyPalette(i: number) {
   store.set('palette', String(i));
   const p = PALETTES[i];
   bath.ground = rgb(p.ground);
+  // the ink on the water keeps its roles and takes the new colours
+  bath.inks = inks(p);
   if (paint >= p.paints.length) paint = 0;
   renderPaints();
   artist?.setPalette(p);

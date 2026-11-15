@@ -14,8 +14,11 @@
 //
 // Coordinates in this API are uv, 0..1 both ways, y up. Inside, the bath
 // is `aspect` wide and 1 high, so circles stay round. Areas are in that
-// unit squared. An ink is its absorbance per channel (Beer–Lambert): what
-// it takes out of the light, so overlapping films darken.
+// unit squared. The film holds how much of each colour role lies where
+// (`ROLES` of them, four to a texture). What a role looks like is its ink
+// (`inks`): its absorbance per channel (Beer–Lambert), what it takes out of
+// the light, so overlapping films darken. Change the inks and the picture on
+// the water changes its colours with them.
 
 // Coarse on purpose: the picture is scaled up (see `scale`), and the GPU
 // load falls with the square of these.
@@ -29,6 +32,10 @@ const DRIFT_EVERY = 4
 const MAXS = 32
 const COVER_W = 16
 const COVER_H = 9
+/** How many colour roles the film can hold: four to a layer. A paint is a
+ *  weight per role; the second layer is only made when a role above the
+ *  fourth is used. */
+export const ROLES = 8
 
 const VERT = `#version 300 es
 in vec2 aPos; out vec2 vUv;
@@ -69,6 +76,12 @@ vec4 sampleCR(sampler2D t, vec2 uv, vec2 size){
   }
   return clamp(r, mn, mx);
 }
+`
+
+/** The film's absorbance: each layer's roles times their inks. */
+const ABSORB = `
+uniform sampler2D uInk, uInk2; uniform mat4x3 uM0, uM1;
+vec3 absorb(vec2 uv){ return uM0*texture(uInk, uv) + uM1*texture(uInk2, uv); }
 `
 
 const FS: Record<string, string> = {
@@ -214,13 +227,15 @@ void main(){
 
   // Area-preserving deformation of the ink film by a list of sources,
   // walked in reverse (backward mapping).
-  //  type 0/1/2: drop (solid / oily / speckled fill). A=(cx,cy,dr2,jag) C=(seed,freq,speed,0)
+  //  type 0/1/2: drop (solid / oily / speckled fill). A=(cx,cy,dr2,jag)
+//              B=(role,amount,0,type) C=(seed,freq,speed,0)
+//  The film is drawn one layer (four roles) at a time: `uLayer`.
   //  type 3:     tine smudge along A.xy to A.xy+C.xy, falloff length C.z,
   //              moving the ink by C.xy times C.w (1 when C.w is 0)
   //  type 4:     swirl round A.xy by the angle A.w, fading out over radius A.z
   deform: `${COMMON}
 #define MAXS ${MAXS}
-uniform sampler2D uInk; uniform vec2 uInkSize; uniform float uAspect, uTime; uniform int uCount;
+uniform sampler2D uInk; uniform vec2 uInkSize; uniform float uAspect, uTime; uniform int uCount, uLayer;
 uniform vec4 uA[MAXS]; uniform vec4 uB[MAXS]; uniform vec4 uC[MAXS];
 
 float angNoise(float a, float seed, float freq, float t, float speed){
@@ -232,12 +247,18 @@ float angNoise(float a, float seed, float freq, float t, float speed){
   return s*0.6;
 }
 
-vec4 makeFill(int type, vec3 col, vec2 p, vec4 C){
+// A drop's paint in this layer: its amount in its role's channel.
+vec4 paint(vec4 B){
+  int r = int(B.x+0.5) - 4*uLayer;
+  return vec4(equal(ivec4(0,1,2,3), ivec4(r)))*B.y;
+}
+
+vec4 makeFill(int type, vec4 col, vec2 p, vec4 C){
   if(type==1){ // oil: ink full of tiny clear oil droplets
     float f = worley(p*150. + vec2(C.x*37., uTime*4.));
     float g = worley(p*310. + vec2(uTime*5., C.x*11.));
     float amt = smoothstep(0.22,0.42,f) * (0.55+0.45*smoothstep(0.15,0.35,g));
-    return vec4(col*amt, 0.);
+    return col*amt;
   }
   if(type==2){ // alcohol: cleared film with sparse ink specks
     vec2 q = p*70. + vec2(C.x*19., uTime*1.5);
@@ -245,9 +266,9 @@ vec4 makeFill(int type, vec3 col, vec2 p, vec4 C){
     float keep = step(0.86, hash12(i+C.x));
     float dots = 1.0 - smoothstep(0.08,0.2, worley(q));
     float mist = smoothstep(0.55, 0.9, fbm(p*25. + C.x)) * 0.12;
-    return vec4(col*(keep*dots*0.9 + mist), 0.);
+    return col*(keep*dots*0.9 + mist);
   }
-  return vec4(col, 0.);
+  return col;
 }
 
 void main(){
@@ -264,10 +285,10 @@ void main(){
       vec2 d = p-A.xy; float L2 = dot(d,d);
       float dr2 = A.z;
       if(A.w > 0.) dr2 *= max(1.0 + A.w*angNoise(atan(d.y,d.x), C.x, C.y, uTime, C.z), 0.05);
-      if(L2 <= dr2){ o = acc + keep*makeFill(type, B.rgb, p, C); return; }
+      if(L2 <= dr2){ o = acc + keep*makeFill(type, paint(B), p, C); return; }
       // Just outside, partly this drop's fill, partly what it pushed aside.
       float t = clamp((sqrt(L2) - sqrt(dr2))/px, 0., 1.);
-      if(t < 1.){ acc += keep*(1.0-t)*makeFill(type, B.rgb, p, C); keep *= t; }
+      if(t < 1.){ acc += keep*(1.0-t)*makeFill(type, paint(B), p, C); keep *= t; }
       p = A.xy + d*sqrt(1.0 - dr2/L2);
     } else if(type==4){
       vec2 d = p-A.xy; float q = dot(d,d)/(A.z*A.z);
@@ -287,28 +308,27 @@ void main(){
 
   // How much ink lies in each cell of a coarse grid: the mean of the
   // film's absorbance over the cell, sampled on a few points.
-  coverage: `${COMMON}
-uniform sampler2D uInk;
+  coverage: `${COMMON}${ABSORB}
 void main(){
   float s = 0.;
   for(int y=0;y<4;y++) for(int x=0;x<4;x++){
     vec2 q = vUv + (vec2(x,y)-1.5)/4.0 / vec2(${COVER_W}.0, ${COVER_H}.0);
-    s += dot(texture(uInk, q).rgb, vec3(1.0/3.0));
+    s += dot(absorb(q), vec3(1.0/3.0));
   }
   o = vec4(clamp(s/16.0, 0., 1.), 0, 0, 1);
 }`,
 
   // The paper laid face down on the water takes up the film: mirrored,
   // a little soft, with fibres and an uneven uptake.
-  print: `${COMMON}
-uniform sampler2D uInk; uniform vec2 uInkSize; uniform float uAspect, uSeed; uniform vec3 uPaper;
+  print: `${COMMON}${ABSORB}
+uniform vec2 uInkSize; uniform float uAspect, uSeed; uniform vec3 uPaper;
 mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
 void main(){
   vec2 iuv = vec2(1.0-vUv.x, vUv.y);
   vec2 tx = 1.2/uInkSize;
-  vec3 a = texture(uInk, iuv).rgb;
-  vec3 bl = (texture(uInk, iuv+vec2(tx.x,0)).rgb + texture(uInk, iuv-vec2(tx.x,0)).rgb +
-             texture(uInk, iuv+vec2(0,tx.y)).rgb + texture(uInk, iuv-vec2(0,tx.y)).rgb)*0.25;
+  vec3 a = absorb(iuv);
+  vec3 bl = (absorb(iuv+vec2(tx.x,0)) + absorb(iuv-vec2(tx.x,0)) +
+             absorb(iuv+vec2(0,tx.y)) + absorb(iuv-vec2(0,tx.y)))*0.25;
   a = mix(a, bl, 0.4);
   vec2 p = vUv*vec2(uAspect,1.0) + uSeed;
   vec3 paper = uPaper;
@@ -330,18 +350,18 @@ void main(){
 uniform float uAspect;
 void main(){ o = vec4(fbm(vUv*vec2(uAspect,1.0)*3.0), 0, 0, 1); }`,
 
-  display: `${COMMON}
-uniform sampler2D uInk, uTray; uniform vec2 uInkSize; uniform float uAspect, uGrain; uniform vec3 uGround;
+  display: `${COMMON}${ABSORB}
+uniform sampler2D uTray; uniform vec2 uInkSize; uniform float uAspect, uGrain; uniform vec3 uGround;
 void main(){
-  vec3 a = texture(uInk, vUv).rgb;
+  vec3 a = absorb(vUv);
   vec2 tx = 1.0/uInkSize;
-  vec3 blur = (texture(uInk, vUv+vec2(1.5*tx.x,0)).rgb + texture(uInk, vUv-vec2(1.5*tx.x,0)).rgb +
-               texture(uInk, vUv+vec2(0,1.5*tx.y)).rgb + texture(uInk, vUv-vec2(0,1.5*tx.y)).rgb)*0.25;
+  vec3 blur = (absorb(vUv+vec2(1.5*tx.x,0)) + absorb(vUv-vec2(1.5*tx.x,0)) +
+               absorb(vUv+vec2(0,1.5*tx.y)) + absorb(vUv-vec2(0,1.5*tx.y)))*0.25;
   a = max(a + 0.7*(a-blur), 0.0);
-  float l = dot(texture(uInk, vUv-vec2(tx.x,0)).rgb, vec3(1));
-  float r = dot(texture(uInk, vUv+vec2(tx.x,0)).rgb, vec3(1));
-  float b = dot(texture(uInk, vUv-vec2(0,tx.y)).rgb, vec3(1));
-  float t = dot(texture(uInk, vUv+vec2(0,tx.y)).rgb, vec3(1));
+  float l = dot(absorb(vUv-vec2(tx.x,0)), vec3(1));
+  float r = dot(absorb(vUv+vec2(tx.x,0)), vec3(1));
+  float b = dot(absorb(vUv-vec2(0,tx.y)), vec3(1));
+  float t = dot(absorb(vUv+vec2(0,tx.y)), vec3(1));
   float edge = clamp(length(vec2(r-l, t-b))*0.6, 0., 1.);
   vec2 p = vUv*vec2(uAspect,1.0);
   // water over a pale tray
@@ -374,7 +394,11 @@ export class Bath {
   readonly gl: WebGL2RenderingContext
   private canvas: HTMLCanvasElement
   private P: Record<string, Program> = {}
-  private ink!: Double
+  /** The film: one layer of four roles, two once a role above the fourth
+   *  is used. */
+  private film: Double[] = []
+  /** A texture of nothing, read in place of a second layer there is not. */
+  private none!: Target
   private vel!: Double
   private pres!: Double
   private divT!: Target
@@ -392,6 +416,8 @@ export class Bath {
   aspect = 1
   /** The tray under the water, display rgb. */
   ground: [number, number, number] = [.968, .962, .952]
+  /** What each colour role looks like: its absorbance per channel. */
+  inks: number[][] = Array.from({ length: ROLES }, () => [.5, .5, .5])
   /** How hard the slow curl-noise current runs. */
   drift = .006
   /** How much of the film is left after a second: old ink fades away. */
@@ -415,6 +441,7 @@ export class Bath {
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('EXT_color_buffer_float is not available')
     gl.getExtension('OES_texture_float_linear')
     this.gl = gl
+    this.none = this.target(1, 1, gl.NEAREST)
     const vs = this.shader(gl.VERTEX_SHADER, VERT)
     for (const [name, src] of Object.entries(FS)) this.P[name] = this.program(vs, src)
     const quad = gl.createBuffer()
@@ -483,6 +510,7 @@ export class Bath {
         case gl.FLOAT_VEC2: gl.uniform2fv(u.loc, val as number[]); break
         case gl.FLOAT_VEC3: gl.uniform3fv(u.loc, val as number[]); break
         case gl.FLOAT_VEC4: gl.uniform4fv(u.loc, val as Float32Array); break
+        case gl.FLOAT_MAT4x3: gl.uniformMatrix4x3fv(u.loc, false, val as number[]); break
       }
     }
     if (dst) { gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo); gl.viewport(0, 0, dst.w, dst.h) }
@@ -495,14 +523,17 @@ export class Bath {
     // No more pixels than the ink film has: more would only be upsampled.
     const cw = canvas.clientWidth, ch = canvas.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, INK_MAX / Math.max(cw, ch, 1), 2)
     const w = Math.max(2, Math.round(cw * dpr)), h = Math.max(2, Math.round(ch * dpr))
-    if (w === canvas.width && h === canvas.height && this.ink) return
+    if (w === canvas.width && h === canvas.height && this.film.length) return
     canvas.width = w; canvas.height = h
     this.aspect = w / h
     this.scale = this.size * Math.min(1, this.aspect)
     const s = Math.min(1, INK_MAX / Math.max(w, h))
-    const old = this.ink
-    this.ink = this.double(Math.round(w * s), Math.round(h * s))
-    if (old) { this.run('copy', this.ink.read, { uSrc: old.read, uScale: 1 }); old.dispose() }
+    const old = this.film.length ? this.film : [null]
+    this.film = old.map(o => {
+      const layer = this.double(Math.round(w * s), Math.round(h * s))
+      if (o) { this.run('copy', layer.read, { uSrc: o.read, uScale: 1 }); o.dispose() }
+      return layer
+    })
     if (this.aspect >= 1) { this.simW = SIM_LONG; this.simH = Math.round(SIM_LONG / this.aspect) }
     else { this.simH = SIM_LONG; this.simW = Math.round(SIM_LONG * this.aspect) }
     this.vel?.dispose(); this.pres?.dispose()
@@ -520,8 +551,8 @@ export class Bath {
   // ── what can be done to the water ───────────────────────────────────
   private bx(x: number) { return x * this.aspect }
 
-  /** A drop on the water at (x, y): `area` of ink (absorbance per channel,
-   *  [0,0,0] for clear water) spreading out, pushing what is there into a
+  /** A drop on the water at (x, y): `area` of ink (a weight per colour
+   *  role, all 0 for clear water) spreading out, pushing what is there into a
    *  ring round it. `jag` roughens its edge; type 1 is oily, 2 speckled. */
   drop(x: number, y: number, area: number, ink: readonly number[], o: Partial<Pick<Drop, 'tau' | 'jag' | 'freq' | 'speed' | 'type' | 'delay' | 'held' | 'instant' | 'length'>> = {}) {
     // New ink finishes the skim before it starts spreading.
@@ -544,7 +575,7 @@ export class Bath {
    *  an `ink` mixed in, the patch is that colour, or only flecked with it. All of
    *  it is a deformation of the film, not of the water, so the curls are as
    *  fine as the ink itself and leave the flow alone. */
-  isoprop(x: number, y: number, size: number, ink: readonly number[] = [0, 0, 0], speckled = false, delay = 0) {
+  isoprop(x: number, y: number, size: number, ink: readonly number[] = [], speckled = false, delay = 0) {
     const seed = ++this.count, k = this.scale
     // The torn edge keeps its shape while it spreads (`speed: 0`): a shape
     // that changed every frame flickered. Its frequency is a whole number,
@@ -631,7 +662,7 @@ export class Bath {
         d.age += dt * (d.pace ?? 1)
         const dA = d.area * (p(d.age) - before)
         d.total += dA
-        if (dA > 1e-9) this.sources.push({ A: [d.x, d.y, dA / Math.PI, d.jag], B: [...d.ink, d.type], C: [d.seed, d.freq, d.speed, 0] })
+        if (dA > 1e-9) this.sources.push({ A: [d.x, d.y, dA / Math.PI, d.jag], B: paintOf(d.ink, d.type), C: [d.seed, d.freq, d.speed, 0] })
         if (d.age < d.length) keep.push(d)
         continue
       }
@@ -647,7 +678,7 @@ export class Bath {
       const ending = d.instant || !d.held && d.age >= d.tau * 3
       const dA = d.instant ? d.area : ending ? Math.max(0, d.release ? 0 : d.area - d.total) : rate * dt
       d.total += dA
-      if (dA > 1e-9) this.sources.push({ A: [d.x, d.y, dA / Math.PI, d.jag], B: [...d.ink, d.type], C: [d.seed, d.freq, d.speed, 0] })
+      if (dA > 1e-9) this.sources.push({ A: [d.x, d.y, dA / Math.PI, d.jag], B: paintOf(d.ink, d.type), C: [d.seed, d.freq, d.speed, 0] })
       if (d.alcohol && d.held) {
         // The solvent front tears the film: swirls along it.
         const r = Math.sqrt(d.total / Math.PI)
@@ -708,21 +739,29 @@ export class Bath {
     this.vel.swap()
     this.run('smoothVel', this.vel.write, { uVel: this.vel.read, uSize: size, uK: .5 })
     this.vel.swap()
-    const inkSize = [this.ink.read.w, this.ink.read.h]
-    this.run('advectInk', this.ink.write, { uInk: this.ink.read, uVel: this.vel.read, uInkSize: inkSize, uDt: dt, uAspect: aspect, uFade: Math.pow(this.fade, dt) })
-    this.ink.swap()
+    // a role above the fourth: the film needs its second layer
+    if (this.film.length < 2 && this.sources.some(s => s.B[3] <= 2 && s.B[0] >= 4 && s.B[1] > 0)) {
+      const { w, h } = this.film[0].read
+      this.film.push(this.double(w, h))
+    }
+    const inkSize = [this.film[0].read.w, this.film[0].read.h]
+    for (const ink of this.film) {
+      this.run('advectInk', ink.write, { uInk: ink.read, uVel: this.vel.read, uInkSize: inkSize, uDt: dt, uAspect: aspect, uFade: Math.pow(this.fade, dt) })
+      ink.swap()
+    }
     const A = new Float32Array(MAXS * 4), B = new Float32Array(MAXS * 4), C = new Float32Array(MAXS * 4)
     for (let i = 0; i < this.sources.length; i += MAXS) {
       const chunk = this.sources.slice(i, i + MAXS)
       A.fill(0); B.fill(0); C.fill(0)
       chunk.forEach((s, j) => { A.set(s.A, j * 4); B.set(s.B, j * 4); C.set(s.C, j * 4) })
-      this.run('deform', this.ink.write, { uInk: this.ink.read, uInkSize: inkSize, uAspect: aspect, uTime: this.time, uCount: chunk.length, uA: A, uB: B, uC: C })
-      this.ink.swap()
+      this.film.forEach((ink, layer) => {
+        this.run('deform', ink.write, { uInk: ink.read, uInkSize: inkSize, uAspect: aspect, uTime: this.time, uCount: chunk.length, uLayer: layer, uA: A, uB: B, uC: C })
+        ink.swap()
+      })
     }
     this.sources = []
     if (this.skimming > 0) {
-      this.run('copy', this.ink.write, { uSrc: this.ink.read, uScale: Math.exp(-dt / .08) })
-      this.ink.swap()
+      this.scaleFilm(Math.exp(-dt / .08))
       this.skimming -= dt
       if (this.skimming <= 0) this.clear()
     }
@@ -735,10 +774,22 @@ export class Bath {
     this.driftDt = 0
     this.driftN = 0
     const gl = this.gl
-    if (keep > 0) { this.run('copy', this.ink.write, { uSrc: this.ink.read, uScale: keep }); this.ink.swap() }
-    else for (const t of [this.ink.read, this.ink.write]) { gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT) }
+    if (keep > 0) this.scaleFilm(keep)
+    else {
+      // a clear bath needs no second layer
+      for (const layer of this.film.splice(1)) layer.dispose()
+      for (const t of [this.film[0].read, this.film[0].write]) { gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT) }
+    }
     for (const t of [this.vel.read, this.vel.write, this.pres.read, this.pres.write]) { gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT) }
     this.drops = []; this.swirls = []; this.forces = []; this.sources = []
+  }
+  private scaleFilm(k: number) {
+    for (const ink of this.film) { this.run('copy', ink.write, { uSrc: ink.read, uScale: k }); ink.swap() }
+  }
+  /** The uniforms that turn the film into absorbance. */
+  private absorb() {
+    const m = (from: number) => this.inks.slice(from, from + 4).flatMap(c => [c[0] ?? 0, c[1] ?? 0, c[2] ?? 0])
+    return { uInk: this.film[0].read, uInk2: this.film[1]?.read ?? this.none, uM0: m(0), uM1: m(4) }
   }
   /** Skim the bath with a strip of paper: the film thins out over a moment
    *  and is gone. */
@@ -747,14 +798,14 @@ export class Bath {
   /** Lay paper on the water: the picture as the paper takes it up, in the
    *  ink film's resolution. Only a faint ghost stays on the water. */
   print(paper: readonly number[] = [.958, .944, .905], seed = Math.random() * 50) {
-    const gl = this.gl, w = this.ink.read.w, h = this.ink.read.h
+    const gl = this.gl, w = this.film[0].read.w, h = this.film[0].read.h
     const tex = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D, tex)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
     const fbo = gl.createFramebuffer()!
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
-    this.run('print', { tex, fbo, w, h }, { uInk: this.ink.read, uInkSize: [w, h], uAspect: this.aspect, uSeed: seed, uPaper: [...paper] })
+    this.run('print', { tex, fbo, w, h }, { ...this.absorb(), uInkSize: [w, h], uAspect: this.aspect, uSeed: seed, uPaper: [...paper] })
     const px = new Uint8ClampedArray(w * h * 4)
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px)
     gl.deleteTexture(tex); gl.deleteFramebuffer(fbo)
@@ -782,7 +833,7 @@ export class Bath {
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
       this.coverT = { tex, fbo, w: COVER_W, h: COVER_H }
     }
-    this.run('coverage', this.coverT, { uInk: this.ink.read })
+    this.run('coverage', this.coverT, this.absorb())
     gl.readPixels(0, 0, COVER_W, COVER_H, gl.RGBA, gl.UNSIGNED_BYTE, this.coverBytes)
     const out = new Float32Array(COVER_W * COVER_H)
     for (let i = 0; i < out.length; i++) out[i] = this.coverBytes[i * 4] / 255
@@ -790,8 +841,16 @@ export class Bath {
   }
 
   render() {
-    this.run('display', null, { uTray: this.trayT!, uInk: this.ink.read, uInkSize: [this.ink.read.w, this.ink.read.h], uAspect: this.aspect, uGround: this.ground, uGrain: this.grain })
+    this.run('display', null, { uTray: this.trayT!, ...this.absorb(), uInkSize: [this.film[0].read.w, this.film[0].read.h], uAspect: this.aspect, uGround: this.ground, uGrain: this.grain })
   }
+}
+
+/** A drop's paint for the deform shader: its strongest role, how much of
+ *  it, and its type. */
+function paintOf(ink: readonly number[], type: number) {
+  let role = 0
+  for (let i = 1; i < ink.length; i++) if (ink[i] > ink[role]) role = i
+  return [role, ink[role] ?? 0, 0, type]
 }
 
 /** A normally distributed number, from a seed. */
