@@ -122,19 +122,21 @@ export class Tour {
       ];
       for (let r = 0; r < rings.length; r++) {
         const [x, y] = rings[r];
-        for (let i = 0; i < 22; i++) {
+        // the first longer, with a change of ink; the second short
+        const drops = r === 0 ? 16 : 10;
+        for (let i = 0; i < drops; i++) {
           if (r === 0 && i === 3) h.hint('Tap the same place again and again.');
           // (a new ink comes after a soap drop, so the turn goes on)
-          if (i === 10) {
+          if (i === (r === 0 ? 8 : 4)) {
             h.paint(ink(k0 + 2 + r));
             if (r === 0) h.hint('Tap another ink at any time.');
           }
           await this.tap(x, y, 0.07);
           await this.wait(0.2);
         }
-        await this.wait(0.8);
+        await this.wait(0.5);
       }
-      await this.wait(1.2);
+      await this.wait(0.8);
 
       // needle
       h.tool('needle');
@@ -180,11 +182,18 @@ export class Tour {
       // alcohol
       h.tool('alcohol');
       await this.say('Alcohol: a tap tears the ink film open.', 1);
-      for (const [x, y] of rings) {
-        await this.tap(x + this.between(-0.05, 0.05), y + this.between(-0.05, 0.05));
-        await this.wait(0.9);
+      {
+        const [x, y] = rings[1];
+        await this.tap(x + this.between(-0.04, 0.04), y + this.between(-0.04, 0.04));
+        await this.wait(1.8);
       }
-      await this.wait(1.5);
+      await this.say('Hold, and the alcohol pushes the ink away.', 0.6);
+      {
+        // held, a slow small circle in the first ring system
+        const [x, y] = rings[0];
+        await this.stroke(t => [x + 0.02 * Math.cos(t * Math.PI * 2), y + 0.012 * Math.sin(t * Math.PI * 2)], 3.5);
+      }
+      await this.wait(2);
 
       // the print
       h.showPrint(true);
